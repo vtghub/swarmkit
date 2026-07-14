@@ -100,6 +100,54 @@ _FOOTER = """\
 See `docs/PLAN.md` for the full build order, what's deferred, and how each
 claim above is verified."""
 
+# The capability descriptions below are the single source of truth for what
+# each part of swarmkit does — used to build AGENTS.md/CLAUDE.md (generate(),
+# below) and also synced verbatim into this repo's own README.md and
+# docs/PLAN.md (sync_repo_docs(), below) so a capability's description is
+# written once, not hand-duplicated across three files that drift apart.
+FEATURE_SECTIONS: dict[str, str] = {
+    "golden_path": _GOLDEN_PATH,
+    "swarm": _SWARM,
+    "memory": _MEMORY,
+    "mcp": _MCP,
+    "security_federation": _SECURITY_FEDERATION,
+}
+
+FEATURES_MARKER_START = "<!-- swarmkit:generated-features:start -->"
+FEATURES_MARKER_END = "<!-- swarmkit:generated-features:end -->"
+
+
+def feature_markdown() -> str:
+    """The shared capability descriptions, without the AGENTS.md-specific
+    intro/footer — this is what gets embedded into README.md/docs/PLAN.md
+    between the generated-features markers."""
+    return "\n\n".join(FEATURE_SECTIONS.values())
+
+
+def _replace_marked_block(text: str, replacement: str) -> str:
+    start_idx = text.index(FEATURES_MARKER_START) + len(FEATURES_MARKER_START)
+    end_idx = text.index(FEATURES_MARKER_END)
+    return f"{text[:start_idx]}\n\n{replacement}\n\n{text[end_idx:]}"
+
+
+def sync_repo_docs(repo_root: str | Path = ".") -> list[Path]:
+    """Replace the generated-features block in *this repo's own*
+    README.md and docs/PLAN.md with the current feature_markdown() output.
+    Run this (via scripts/sync_docs.py) after changing any FEATURE_SECTIONS
+    entry, instead of hand-editing the same capability description into
+    both files. Returns the paths that were actually changed."""
+    root = Path(repo_root)
+    replacement = feature_markdown()
+    changed: list[Path] = []
+    for relpath in ("README.md", "docs/PLAN.md"):
+        path = root / relpath
+        original = path.read_text()
+        updated = _replace_marked_block(original, replacement)
+        if updated != original:
+            path.write_text(updated)
+            changed.append(path)
+    return changed
+
 
 def _agent_catalog_section(catalog: AgentCatalog) -> str:
     summary = catalog.render_summary()

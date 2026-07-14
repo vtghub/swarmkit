@@ -18,6 +18,79 @@ There is also a planned integration with `vtghub/mcp-native-core` as an upstream
 
 The guiding principle for the whole build: **no capability ships unless a test observes a real, external side effect proving it happened** (a subprocess PID, an Anthropic `request_id`, a measured byte-size, measured wall-clock concurrency). Where Ruflo's marketed feature is unverifiable at this scale (Byzantine consensus, HIPAA/SOC2/GDPR "compliance modes", 106 agents, entity-graph+trajectory RAG), the plan builds a smaller, honestly-scoped, real version instead and flags what's deferred.
 
+## Features
+
+Generated from `src/swarmkit/docs/generate.py` (also the source for `swarmkit docs generate`'s `AGENTS.md`/`CLAUDE.md` output and README.md's Features section) — a single source of truth for capability descriptions instead of hand-duplicating them here, in README.md, and in the generated project docs. Run `python scripts/sync_docs.py` after changing a description there. The Architecture section below covers *why* each of these was built this way (language split, deferred scope, phase-by-phase implementation notes) rather than restating *what* it does.
+
+<!-- swarmkit:generated-features:start -->
+
+## Golden path
+
+```
+swarmkit init                          # checks ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN
+swarmkit daemon start                  # background daemon owning the real Rust worker pool
+swarmkit run "<goal>"                  # one agent, tool calls sandboxed via the daemon
+swarmkit swarm run "<goal>"            # decompose into concurrent, quorum-verified subtasks
+swarmkit status                        # real task/PID info, sourced from Rust
+swarmkit audit                         # every tool call + provider request, append-only
+swarmkit daemon stop
+```
+
+## Swarm coordination
+
+`swarmkit swarm run "<goal>" --topology star|mesh` decomposes a goal into
+subtasks via the Anthropic API's structured output, then dispatches them
+concurrently through swarmkitd's Rust worker pool. `star` has no concurrency
+cap; `mesh` caps fan-out at 8 concurrent agents (a real enforced limit, not
+a marketing number). Subtasks with a `verify_command` are quorum-verified:
+re-run across 3 independent replicas, accepted only on majority agreement —
+a real reliability mechanism, not an unverifiable Raft/Byzantine/Gossip
+claim. Full Raft/Byzantine/Gossip consensus is explicitly out of scope for
+v1.
+
+## Memory / RAG
+
+SQLite (`memory.db`) + FTS5 for keyword search, a compact Rust-backed
+vector store (`vectors.bin`, fixed-width binary format, lazy `instant-distance`
+HNSW) for semantic search. Retrieval combines both via Reciprocal Rank
+Fusion, then re-ranks with MMR for diversity. Measured at ~1KB/entry on
+disk — orders of magnitude smaller than Ruflo's reported ~5MB/entry.
+Embeddings are pluggable: a dependency-free `HashingEmbedder` by default, or
+`SentenceTransformerEmbedder` (`pip install 'swarmkit[embeddings]'`) for
+real semantic quality.
+
+## MCP integration
+
+`swarmkit mcp serve` exposes swarmkit's own tools over stdio:
+- `spawn_agent` / `get_task_status` — proxy to a real daemon RPC; the agent
+  runs inside swarmkitd, its tool calls dispatched through the Rust worker
+  pool.
+- `list_agents` — the same name+description-only catalog view above.
+- `query_memory` — hybrid RRF+MMR retrieval over a memory directory.
+
+`swarmkit mcp list-tools <command> [args...]` inspects any external stdio
+MCP server. Agents can also pull tools from an external MCP server directly
+into their tool loop (`Agent.run(..., extra_tools=...)`) — verified against
+a real third-party MCP server binary, not just a protocol mock.
+
+## Security & federation
+
+Every sandboxed subprocess execution and every Anthropic provider request is
+recorded in an append-only audit log (`swarmkit audit`) — `UPDATE`/`DELETE`
+are rejected by SQLite triggers at the engine level, not just by API
+convention. Stdout/stderr are redacted for API keys, tokens, and private-key
+blocks before they're ever written.
+
+Federation is minimal but real: each daemon generates and persists its own
+ed25519 keypair (`swarmkit identity`); peers are registered explicitly
+(`swarmkit peer add <name> <host> <port> <pubkey>`, exchanged out-of-band —
+no auto-discovery, no trust-on-first-use). Daemon-to-daemon task requests
+are signed over their canonical JSON payload and verified against the
+sender's registered key before anything reaches the worker pool. Full mTLS
+and formal compliance certifications are explicitly out of scope for v1.
+
+<!-- swarmkit:generated-features:end -->
+
 ## Architecture
 
 **Language split**: mirroring Ruflo's own Rust-engine-plus-plugins design, everything performance-sensitive is a Rust core (`crates/swarmkit-core`) exposed to Python via `PyO3`/`maturin` as a native extension module (`swarmkit._native`); Python owns orchestration, LLM calls, and protocol glue where latency doesn't matter and iteration speed does. Concretely:
@@ -33,13 +106,13 @@ The guiding principle for the whole build: **no capability ships unless a test o
 
 *Scope note: no `mcp_tool_exec.rs` was added.* The original plan called for a dedicated Rust module for the MCP server's "hot dispatch/validation path," but by Phase 4 that path already ran through existing Rust modules end to end — `spawn_agent`/`get_task_status` through `worker_pool.rs`/`taskqueue.rs`, `query_memory` through `vectors.rs`. A pass-through Rust file that just re-forwarded to those modules would have been indirection with no real work of its own — exactly the kind of theater this project exists to avoid — so it was left out.
 
-**Swarm coordination**: two topologies — `star` (one coordinator decomposes a goal into a subtask DAG via structured/JSON-schema output) and a fan-out-capped `mesh` (~8 peers max). Task distribution runs through the Rust work-stealing queue. For consensus, skip pretending to implement Raft/Byzantine/Gossip on a single daemon — instead use a **quorum/majority-vote verification** mechanism: correctness-sensitive subtasks get dispatched to 3 independent worker instances and accepted on 2-of-3 agreement. Once federation exists (multi-daemon), use a simple time-boxed **leader-lease + heartbeat** model, not a from-scratch distributed consensus algorithm.
+**Swarm coordination** *(current behavior: see ## Features)*: two topologies — `star` (one coordinator decomposes a goal into a subtask DAG via structured/JSON-schema output) and a fan-out-capped `mesh`. Task distribution runs through the Rust work-stealing queue. For consensus, skip pretending to implement Raft/Byzantine/Gossip on a single daemon — quorum/majority-vote verification stands in instead. Once federation needs cross-daemon leader election (not required for v1 — quorum verification alone has sufficed), use a simple time-boxed **leader-lease + heartbeat** model, not a from-scratch distributed consensus algorithm.
 
-**Memory/RAG**: SQLite for structured storage (`tasks`, `agent_runs`, `tool_calls`, `entities`, `memories`) stays Python (`memory/store.py`, simple glue over `sqlite3`/`aiosqlite`). Vectors move to Rust: an in-process HNSW implementation (`instant-distance`) backing `memory/vectors`, persisted to disk and called from Python via the native module — this is the layer most exposed to Ruflo's "100MB for 20 entries" bloat, so a compact Rust-side binary format (fixed-width float arrays, no per-entry JSON/object overhead) is the direct fix. `faiss-cpu` deliberately skipped — heavier, GPU-oriented, and redundant once Rust owns the vector index. Embeddings inference (`sentence-transformers`, `all-MiniLM-L6-v2`) stays Python for now since it's the one unavoidable non-Anthropic ML dependency and ONNX/Rust-native embedding is an optimization to revisit later, not a Phase 0–5 requirement. Retrieval: hybrid FTS5 (keyword, SQLite) + vector similarity (Rust) combined via Reciprocal Rank Fusion, then MMR re-rank for diversity. A CI-tracked benchmark asserts bytes-per-memory-entry stays in the low-single-digit-KB range (vs. Ruflo's ~100MB/20 entries).
+**Memory/RAG** *(current behavior: see ## Features)*: SQLite for structured storage (`tasks`, `agent_runs`, `tool_calls`, `entities`, `memories`) stays Python (`memory/store.py`, simple glue over `sqlite3`/`aiosqlite`). Vectors move to Rust: an in-process HNSW implementation (`instant-distance`) backing `memory/vectors`, persisted to disk and called from Python via the native module — this is the layer most exposed to Ruflo's "100MB for 20 entries" bloat, so a compact Rust-side binary format (fixed-width float arrays, no per-entry JSON/object overhead) is the direct fix. `faiss-cpu` deliberately skipped — heavier, GPU-oriented, and redundant once Rust owns the vector index. Embeddings inference (`sentence-transformers`, `all-MiniLM-L6-v2`) stays Python for now since it's the one unavoidable non-Anthropic ML dependency and ONNX/Rust-native embedding is an optimization to revisit later, not a Phase 0–5 requirement. A CI-tracked benchmark asserts bytes-per-memory-entry stays in the low-single-digit-KB range (vs. Ruflo's ~100MB/20 entries).
 
-**Agent catalog**: 5 starter agents (`coder`, `reviewer`, `tester`, `docs`, `architect`), each a small YAML file (`name`, `description`, `system_prompt`, `allowed_tools`, `default_model`, `default_effort`). The coordinator's context only ever holds name+description pairs (a few hundred tokens total); full persona + tool schemas load only on actual spawn — this is the direct, testable fix for Ruflo's ~300K-token default bloat. New agents are added by dropping a YAML file into `agents/definitions/` or `~/.config/swarmkit/agents/`.
+**Agent catalog** *(current behavior: see ## Features)*: 5 starter agents (`coder`, `reviewer`, `tester`, `docs`, `architect`), each a small YAML file (`name`, `description`, `system_prompt`, `allowed_tools`, `default_model`, `default_effort`). This is the direct, testable fix for Ruflo's ~300K-token default bloat.
 
-**Federation & security**: Full mTLS + ed25519 federation with formal compliance certifications is out of scope for v1 (it's a multi-quarter, legal-sign-off effort, not just code — faking a compliance toggle is exactly the theater this project exists to avoid). Minimal-but-real version: each daemon generates an ed25519 keypair on first run; peers are added explicitly (`swarmkit peer add <host:port> <pubkey>`, no auto-discovery/trust-on-first-use); daemon-to-daemon RPC reuses the MCP Streamable HTTP transport with every request signed and verified against the registered peer key. Security from Phase 0 onward: `security/sandbox.py` (resource limits + working-directory jail + allowlist, never blocklist, for bash-like tools) and `security/audit.py` (append-only SQLite log of every tool call / provider request with its Anthropic `request_id` / subprocess exec — this log is also the evidence source for "not theater" tests).
+**Federation & security** *(current behavior: see ## Features)*: Full mTLS + ed25519 federation with formal compliance certifications is out of scope for v1 (it's a multi-quarter, legal-sign-off effort, not just code — faking a compliance toggle is exactly the theater this project exists to avoid). Security from Phase 0 onward: `security/sandbox.py` (resource limits + working-directory jail + allowlist, never blocklist, for bash-like tools).
 
 **CLI/UX**: a golden path of five commands — `swarmkit init`, `swarmkit daemon start|stop|status`, `swarmkit run "<goal>"` (auto-spins coordinator+agents, streams, exits), `swarmkit status`, `swarmkit memory query "<text>"` — with advanced flags (`swarm init --topology mesh`, `agent spawn|list|add`, `peer add|list|remove`, `mcp serve|connect`, `config show|set`) discoverable via `--help` but never required on first run.
 
