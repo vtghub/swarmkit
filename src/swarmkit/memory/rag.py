@@ -47,7 +47,10 @@ class MemoryIndex:
         [query_vector] = self.embedder.embed([query])
         vector_hits = self.vectors.search(query_vector, k=candidates)
 
-        fused = _reciprocal_rank_fusion(keyword_hits, vector_hits)
+        fused = reciprocal_rank_fusion(
+            [record.id for record, _ in keyword_hits],
+            [mem_id for mem_id, _ in vector_hits],
+        )
         if not fused:
             return []
 
@@ -68,15 +71,21 @@ class MemoryIndex:
         return [RetrievedMemory(record=r, score=fused[r.id]) for r in selected]
 
 
-def _reciprocal_rank_fusion(
-    keyword_hits: list[tuple[MemoryRecord, float]],
-    vector_hits: list[tuple[str, float]],
+def reciprocal_rank_fusion(
+    keyword_ids: list[str],
+    vector_ids: list[str],
+    *,
+    k: int = RRF_K,
 ) -> dict[str, float]:
+    """Combine two independently-ranked id lists into one fused score per id
+    — the standard RRF formula. Shared by MemoryIndex (above) and
+    memory/trajectories.py's TrajectoryStore, so every hybrid retriever in
+    swarmkit combines keyword+vector rankings the same way."""
     scores: dict[str, float] = {}
-    for rank, (record, _bm25) in enumerate(keyword_hits):
-        scores[record.id] = scores.get(record.id, 0.0) + 1.0 / (RRF_K + rank + 1)
-    for rank, (mem_id, _distance) in enumerate(vector_hits):
-        scores[mem_id] = scores.get(mem_id, 0.0) + 1.0 / (RRF_K + rank + 1)
+    for rank, item_id in enumerate(keyword_ids):
+        scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank + 1)
+    for rank, item_id in enumerate(vector_ids):
+        scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank + 1)
     return dict(sorted(scores.items(), key=lambda kv: kv[1], reverse=True))
 
 

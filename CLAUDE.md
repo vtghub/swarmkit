@@ -65,6 +65,24 @@ MCP server. Agents can also pull tools from an external MCP server directly
 into their tool loop (`Agent.run(..., extra_tools=...)`) — verified against
 a real third-party MCP server binary, not just a protocol mock.
 
+## Self-learning
+
+There's no fine-tuning or weight updates — swarmkit's agents are stateless
+LLM calls, so "learning" means retrieval-augmented precedent, made real
+by tying it to signals that already exist rather than guessing at them.
+For a `swarm run` subtask with a `verify_command`, the quorum-verified
+success/failure (see Swarm coordination above) is the only trigger for
+trajectory recording: never for unverified subtasks, where no real
+outcome signal exists. Before dispatch, the coordinator retrieves that
+agent's relevant past attempts (`memory/trajectories.py`, the same
+RRF-fused keyword+vector search as Memory/RAG) and folds them into the
+agent's actual prompt (`Agent.run(..., context_hints=...)`) as concrete
+precedent — a change to the model's own input, not a hidden internal
+state update. Each lesson is derived mechanically from what the run
+actually did (the failing command and its stderr, or the sequence of
+commands that succeeded), not an LLM's summary of itself. `swarmkit
+trajectories` lists everything recorded so far.
+
 ## Security & federation
 
 Every sandboxed subprocess execution and every Anthropic provider request is

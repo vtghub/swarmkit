@@ -68,6 +68,24 @@ MCP server. Agents can also pull tools from an external MCP server directly
 into their tool loop (`Agent.run(..., extra_tools=...)`) — verified against
 a real third-party MCP server binary, not just a protocol mock.
 
+## Self-learning
+
+There's no fine-tuning or weight updates — swarmkit's agents are stateless
+LLM calls, so "learning" means retrieval-augmented precedent, made real
+by tying it to signals that already exist rather than guessing at them.
+For a `swarm run` subtask with a `verify_command`, the quorum-verified
+success/failure (see Swarm coordination above) is the only trigger for
+trajectory recording: never for unverified subtasks, where no real
+outcome signal exists. Before dispatch, the coordinator retrieves that
+agent's relevant past attempts (`memory/trajectories.py`, the same
+RRF-fused keyword+vector search as Memory/RAG) and folds them into the
+agent's actual prompt (`Agent.run(..., context_hints=...)`) as concrete
+precedent — a change to the model's own input, not a hidden internal
+state update. Each lesson is derived mechanically from what the run
+actually did (the failing command and its stderr, or the sequence of
+commands that succeeded), not an LLM's summary of itself. `swarmkit
+trajectories` lists everything recorded so far.
+
 ## Security & federation
 
 Every sandboxed subprocess execution and every Anthropic provider request is
@@ -98,6 +116,7 @@ deferred are tracked in [`docs/PLAN.md`](docs/PLAN.md#build-order):
 - **Phase 4** (done): MCP integration, both directions, verified against the real `vtghub/mcp-native-core` binary.
 - **Phase 5** (done, v1 complete): security hardening + minimal federation, verified against two real `swarmkitd` OS processes — `tests/integration/test_federation_lifecycle.py`.
 - **Docs generation** (done): `swarmkit docs generate` emits the lean `AGENTS.md`/`CLAUDE.md` above — `tests/unit/test_docs_generate.py`.
+- **Self-learning** (done): trajectory memory (`memory/trajectories.py`) recorded only on a verified subtask's real quorum outcome, retrieved and folded into the next similar goal's actual prompt — `tests/unit/test_coordinator_trajectories.py` proves the retrieve-then-record loop without a live LLM.
 
 Nothing here should be assumed to work until its corresponding test/demo script is green; see `docs/PLAN.md` for the phase-by-phase build order and what "done" means for each phase.
 
@@ -141,6 +160,12 @@ SWARMKIT_RUNTIME_DIR=/tmp/peer-b swarmkit daemon start --federation-port 9002
 
 # Docs: emit a lean AGENTS.md/CLAUDE.md reflecting the real v1 feature surface
 swarmkit docs generate --dir .
+
+# Phase 6: run the same swarm goal twice — the second run's coder subtask
+# retrieves the first run's lesson and folds it into its own prompt
+swarmkit swarm run "run the test suite and report the result" --topology star
+swarmkit swarm run "run the test suite again and report the result" --topology star
+swarmkit trajectories --agent coder
 ```
 
 ## License

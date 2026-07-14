@@ -39,6 +39,14 @@ def peers_path() -> Path:
     return runtime_dir() / "peers.json"
 
 
+def trajectories_db_path() -> Path:
+    return runtime_dir() / "trajectories.db"
+
+
+def trajectories_vectors_path() -> Path:
+    return runtime_dir() / "trajectories_vectors.bin"
+
+
 def _pool_executor(
     pool: "_native.WorkerPool",
     jail_root: str,

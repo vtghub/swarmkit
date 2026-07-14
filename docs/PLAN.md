@@ -72,6 +72,24 @@ MCP server. Agents can also pull tools from an external MCP server directly
 into their tool loop (`Agent.run(..., extra_tools=...)`) — verified against
 a real third-party MCP server binary, not just a protocol mock.
 
+## Self-learning
+
+There's no fine-tuning or weight updates — swarmkit's agents are stateless
+LLM calls, so "learning" means retrieval-augmented precedent, made real
+by tying it to signals that already exist rather than guessing at them.
+For a `swarm run` subtask with a `verify_command`, the quorum-verified
+success/failure (see Swarm coordination above) is the only trigger for
+trajectory recording: never for unverified subtasks, where no real
+outcome signal exists. Before dispatch, the coordinator retrieves that
+agent's relevant past attempts (`memory/trajectories.py`, the same
+RRF-fused keyword+vector search as Memory/RAG) and folds them into the
+agent's actual prompt (`Agent.run(..., context_hints=...)`) as concrete
+precedent — a change to the model's own input, not a hidden internal
+state update. Each lesson is derived mechanically from what the run
+actually did (the failing command and its stderr, or the sequence of
+commands that succeeded), not an LLM's summary of itself. `swarmkit
+trajectories` lists everything recorded so far.
+
 ## Security & federation
 
 Every sandboxed subprocess execution and every Anthropic provider request is
@@ -151,8 +169,9 @@ swarmkit/
 - **Phase 3** — swarm coordination + multi-agent tasks. Done when: a goal is decomposed into ≥2 concurrent subtasks, quorum-verified, dispatched through the Rust worker pool, and a token-budget test proves lazy agent loading.
 - **Phase 4** (done) — MCP server exposing real tools; hot-path execution already ran through existing Rust modules end to end, so no new one was added (see the MCP integration scope note above). Done when: an external MCP client can trigger a real daemon-scheduled task (verified twice — direct tool-function call and full MCP wire protocol via `client_tools.connect_stdio`); swarmkit consumes both a generic external MCP server (a test fixture) and the real, inspected `vtghub/mcp-native-core` binary's `fast_search`/`parse_structure` tools.
 - **Phase 5** (done) — security hardening + minimal federation. `security/secrets.py` (regex-based redaction of API keys/tokens/private-key blocks, applied before anything is written to the audit log), `security/audit.py` (append-only SQLite log — `BEFORE UPDATE`/`BEFORE DELETE` triggers `RAISE(ABORT, ...)` at the engine level, not just by API convention; both swarmkitd and CLI-hosted runs open the same file directly, no RPC needed), `federation/identity.py` (ed25519 keypair generated and persisted on first run, survives daemon restart; `PeerRegistry` is explicit JSON, no auto-discovery/trust-on-first-use), `federation/transport.py` (Starlette + uvicorn HTTP listener, every request signed over its canonical JSON payload and verified against the sender's registered key before anything reaches the worker pool). Done when: two local daemons complete a signed cross-daemon task (verified against two real `swarmkitd` OS processes — `tests/integration/test_federation_lifecycle.py` — not just an in-process simulation), and a sandbox test (Rust-enforced) blocks a disallowed command pre-execution (`sandbox::tests::non_allowlisted_command_is_rejected_before_spawn`, already in place since Phase 0; also re-verified end-to-end over the federation transport itself).
+- **Phase 6** (done) — self-learning: trajectory memory. `memory/trajectories.py` (`TrajectoryStore`: SQLite + FTS5 + the same RRF-fused vector search as `memory/rag.py`, `derive_lesson()` deriving a lesson mechanically from `sandbox_calls` — no LLM summarization step). `agents/base.py` gained `Agent.run(..., context_hints=...)`, a generic prompt-injection seam decoupled from trajectories specifically. `swarm/coordinator.py` wires the two together around the one place a real success/failure signal already exists — a verified subtask's quorum outcome — retrieving relevant past lessons before dispatch and recording the new outcome after; unverified subtasks never record a trajectory, since there's nothing real to record. This is a deliberately smaller, honestly-scoped subset of the "entity-graph/trajectory-learning RAG" idea flagged as out of scope below: outcome-tagged trajectories with hybrid retrieval, not an entity-relationship graph. Done when: without a live LLM, a coordinator run demonstrably folds a prior lesson into the next similar goal's actual prompt, and a verified subtask's real quorum outcome — never an unverified one's — produces exactly one new trajectory record (`tests/unit/test_coordinator_trajectories.py`).
 
-**Explicitly out of scope for v1**: full Raft/Byzantine/Gossip consensus, full mTLS + formal compliance certifications, a 106-agent catalog, entity-graph/trajectory-learning RAG, web UIs (CLI + MCP first), and Rust-native embeddings inference (stays Python/`sentence-transformers` until there's a measured reason to move it).
+**Explicitly out of scope for v1**: full Raft/Byzantine/Gossip consensus, full mTLS + formal compliance certifications, a 106-agent catalog, an entity-relationship graph over memories, web UIs (CLI + MCP first), and Rust-native embeddings inference (stays Python/`sentence-transformers` until there's a measured reason to move it).
 
 ## Verification
 
@@ -165,5 +184,6 @@ Every phase's "done" criterion above is a runnable check, not a vibe:
 - Concurrency proof: wall-clock timing test for N parallel agent tasks dispatched through the Rust worker pool.
 - Security proof: sandbox fuzz test (against the Rust sandbox module) asserting the path-jail/allowlist blocks disallowed commands.
 - MCP proof: a scripted client calls every exposed tool — including whatever `vtghub/mcp-native-core` provides once inspected — and asserts a real side effect (not just a 200 response).
+- Self-learning proof: a fake-client test captures the literal `messages` kwargs sent to the tool runner and asserts a stored lesson appears in it; a coordinator-level test asserts a verified subtask's real quorum outcome — and only that — produces exactly one new trajectory record, with an unverified subtask asserted to produce none.
 
 Each phase ends with `scripts/demo_single_agent.py` or `scripts/demo_swarm.py` runnable end-to-end against the real Anthropic API as a human-visible smoke test, in addition to the automated tests above.

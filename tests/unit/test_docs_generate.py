@@ -55,6 +55,8 @@ def test_generated_doc_covers_every_v1_capability():
         "Swarm coordination",
         "Memory / RAG",
         "MCP integration",
+        "Self-learning",
+        "trajectories",
         "Security & federation",
         "audit",
         "peer add",

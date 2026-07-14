@@ -18,12 +18,19 @@ from swarmkit.daemon.server import (
     peers_path,
     pid_path,
     socket_path,
+    trajectories_db_path,
+    trajectories_vectors_path,
 )
 from swarmkit.federation.identity import PeerRegistry, load_or_create_identity
 from swarmkit.mcp_server import client_tools
+from swarmkit.memory.embeddings import HashingEmbedder
+from swarmkit.memory.trajectories import TrajectoryStore
+from swarmkit.memory.vectors import open_vector_store
 from swarmkit.security.audit import AuditLog
 from swarmkit.swarm.coordinator import Coordinator
 from swarmkit.swarm.topology import Topology
+
+TRAJECTORY_EMBEDDING_DIM = 384
 
 DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_COORDINATOR_MODEL = "claude-opus-4-8"
@@ -310,16 +317,24 @@ def swarm_run(
     concurrency: int,
 ) -> None:
     """Decompose GOAL into subtasks and dispatch them to catalog agents
-    concurrently, through swarmkitd's Rust worker pool."""
+    concurrently, through swarmkitd's Rust worker pool. Verified subtasks
+    (those with a verify_command) both draw on and contribute to trajectory
+    memory (swarmkit trajectories) — the real success/failure signal quorum
+    verification already produces is the only thing that triggers it."""
     abs_workdir = os.path.abspath(workdir)
     supervisor.start(concurrency=concurrency)
 
     catalog = AgentCatalog()
+    trajectory_vectors = open_vector_store(trajectories_vectors_path())
+    trajectories = TrajectoryStore(
+        trajectories_db_path(), trajectory_vectors, HashingEmbedder(dim=TRAJECTORY_EMBEDDING_DIM)
+    )
     coordinator = Coordinator(
         catalog,
         coordinator_model=coordinator_model,
         topology=Topology(topology),
         executor=_daemon_executor(abs_workdir, abs_workdir, list(allowed)),
+        trajectories=trajectories,
     )
 
     async def _run() -> None:
@@ -355,7 +370,54 @@ def swarm_run(
 
         click.echo(f"overall: {'success' if result.success else 'FAILED'}")
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    finally:
+        trajectory_vectors.save(str(trajectories_vectors_path()))
+        trajectories.close()
+
+
+@cli.command()
+@click.option("--agent", "agent_name", default=None, help="Filter to trajectories recorded for this agent.")
+@click.option("--outcome", type=click.Choice(["success", "failure"]), default=None)
+@click.option("--limit", default=20, show_default=True)
+def trajectories(agent_name: str | None, outcome: str | None, limit: int) -> None:
+    """Show recorded trajectories: past `swarm run` subtasks that had a
+    verify_command, the real success/failure signal quorum verification
+    produced, and the mechanically-derived lesson — swarmkit's self-learning
+    memory (see memory/trajectories.py). Reads the log file directly; no
+    daemon needs to be running."""
+    db_path = trajectories_db_path()
+    if not db_path.exists():
+        click.echo("no trajectories recorded yet")
+        return
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        query = "SELECT id, agent_name, goal, outcome, lesson, created_at FROM trajectories WHERE 1=1"
+        params: list[str | int] = []
+        if agent_name:
+            query += " AND agent_name = ?"
+            params.append(agent_name)
+        if outcome:
+            query += " AND outcome = ?"
+            params.append(outcome)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        click.echo("no trajectories recorded yet")
+        return
+    for row in rows:
+        _id, agent, goal, out, lesson, created_at = row
+        click.echo(f"[{out}] {agent} @ {created_at:.3f}")
+        click.echo(f"  goal: {goal}")
+        click.echo(f"  lesson: {lesson}")
 
 
 @cli.group()

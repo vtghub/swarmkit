@@ -88,11 +88,18 @@ class Agent:
         allowed_executables: list[str],
         timeout_secs: float = 30.0,
         extra_tools: list[Any] | None = None,
+        context_hints: list[str] | None = None,
     ) -> AgentRunResult:
         """`extra_tools` are additional tool_runner-compatible tools appended
         alongside run_command — e.g. tools from an external MCP server via
         mcp_server.client_tools.connect_stdio(), so an agent can use
-        third-party capabilities (search, parsing, ...) in the same loop."""
+        third-party capabilities (search, parsing, ...) in the same loop.
+
+        `context_hints` are plain-text lines prepended to the goal as
+        concrete precedent before it reaches the model — e.g. lessons from
+        past attempts at similar goals (memory/trajectories.py). Agent stays
+        unaware of where hints come from; it just sees them as part of its
+        own input, same as any other part of the prompt."""
         sandbox_calls: list[dict[str, Any]] = []
         executor = self._executor or local_executor(
             jail_root=jail_root,
@@ -112,6 +119,11 @@ class Agent:
             sandbox_calls.append({"command": command, **result})
             return json.dumps(result)
 
+        content = goal
+        if context_hints:
+            hints_block = "\n".join(f"- {hint}" for hint in context_hints)
+            content = f"Relevant past experience:\n{hints_block}\n\nYour goal: {goal}"
+
         runner = self.provider.client.beta.messages.tool_runner(
             model=self.config.model,
             max_tokens=8192,
@@ -119,7 +131,7 @@ class Agent:
             thinking={"type": "adaptive"},
             output_config={"effort": self.config.effort},
             tools=[run_command, *(extra_tools or [])],
-            messages=[{"role": "user", "content": goal}],
+            messages=[{"role": "user", "content": content}],
         )
 
         last = None

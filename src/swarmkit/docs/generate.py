@@ -6,8 +6,8 @@ only view the coordinator itself sees. It structurally cannot balloon into
 a large block of persona text, because the catalog itself never loads
 persona text until an agent is actually spawned. Everything else below is a
 short, current description of swarmkit's real (not aspirational) v1 feature
-surface: single-agent runs, swarm coordination, memory/RAG, MCP, security,
-and federation.
+surface: single-agent runs, swarm coordination, memory/RAG, MCP,
+self-learning, security, and federation.
 """
 
 from __future__ import annotations
@@ -78,6 +78,25 @@ MCP server. Agents can also pull tools from an external MCP server directly
 into their tool loop (`Agent.run(..., extra_tools=...)`) — verified against
 a real third-party MCP server binary, not just a protocol mock."""
 
+_SELF_LEARNING = """\
+## Self-learning
+
+There's no fine-tuning or weight updates — swarmkit's agents are stateless
+LLM calls, so "learning" means retrieval-augmented precedent, made real
+by tying it to signals that already exist rather than guessing at them.
+For a `swarm run` subtask with a `verify_command`, the quorum-verified
+success/failure (see Swarm coordination above) is the only trigger for
+trajectory recording: never for unverified subtasks, where no real
+outcome signal exists. Before dispatch, the coordinator retrieves that
+agent's relevant past attempts (`memory/trajectories.py`, the same
+RRF-fused keyword+vector search as Memory/RAG) and folds them into the
+agent's actual prompt (`Agent.run(..., context_hints=...)`) as concrete
+precedent — a change to the model's own input, not a hidden internal
+state update. Each lesson is derived mechanically from what the run
+actually did (the failing command and its stderr, or the sequence of
+commands that succeeded), not an LLM's summary of itself. `swarmkit
+trajectories` lists everything recorded so far."""
+
 _SECURITY_FEDERATION = """\
 ## Security & federation
 
@@ -109,6 +128,7 @@ FEATURE_SECTIONS: dict[str, str] = {
     "swarm": _SWARM,
     "memory": _MEMORY,
     "mcp": _MCP,
+    "self_learning": _SELF_LEARNING,
     "security_federation": _SECURITY_FEDERATION,
 }
 
@@ -172,6 +192,7 @@ def generate(catalog: AgentCatalog | None = None) -> str:
         _SWARM,
         _MEMORY,
         _MCP,
+        _SELF_LEARNING,
         _SECURITY_FEDERATION,
         _FOOTER,
     ]
