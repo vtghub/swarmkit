@@ -23,6 +23,7 @@ swarmkit is an attempt at the same feature surface — agents, swarm coordinatio
 
 - **Phase 0** (done): a single real agent — a real Anthropic call whose tool use runs as a real Rust-sandboxed subprocess.
 - **Phase 1** (done): `swarmkitd`, a background daemon owning a real Rust worker pool (`crates/swarmkit-core/src/{worker_pool,taskqueue}.rs`). `swarmkit run` now dispatches tool execution through the daemon over a Unix domain socket instead of running the subprocess in-process; `swarmkit daemon start|stop|status` and `swarmkit status` manage and inspect it. N tasks submitted at worker-pool concurrency N complete in ~max(latency), not sum(latency) — see `tests/unit/test_worker_pool.py`.
+- **Phase 2** (done): memory/RAG. `crates/swarmkit-core/src/vectors.rs` is a compact vector store (fixed-width binary format, `instant-distance` HNSW rebuilt lazily from it) exposed as `swarmkit._native.VectorStore`; `src/swarmkit/memory/store.py` is SQLite + FTS5 for text/keyword search; `src/swarmkit/memory/rag.py` combines both via Reciprocal Rank Fusion, then re-ranks with MMR for diversity. Measured ~1KB/entry on disk (`tests/unit/test_memory_vectors.py`), vs. Ruflo's reported ~5MB/entry — roughly 4,700x smaller, not just "10x". Embeddings are pluggable (`src/swarmkit/memory/embeddings.py`): a dependency-free `HashingEmbedder` for tests/offline use, and an optional `SentenceTransformerEmbedder` (`pip install 'swarmkit[embeddings]'`) for real semantic quality.
 
 Nothing here should be assumed to work until its corresponding test/demo script is green; see `docs/PLAN.md` for the phase-by-phase build order and what "done" means for each remaining phase.
 
@@ -43,6 +44,9 @@ swarmkit daemon start
 swarmkit run "list the files in this directory"
 swarmkit status
 swarmkit daemon stop
+
+# Phase 2: memory/RAG demo (no API key or ML download needed)
+python scripts/demo_memory.py
 ```
 
 ## License

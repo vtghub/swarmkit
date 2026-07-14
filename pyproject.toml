@@ -21,6 +21,9 @@ dev = [
     "pytest-asyncio>=0.24",
     "psutil>=6.0",
 ]
+embeddings = [
+    "sentence-transformers>=3.0",
+]
 
 [project.scripts]
 swarmkit = "swarmkit.cli.main:cli"

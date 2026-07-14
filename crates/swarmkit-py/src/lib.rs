@@ -13,6 +13,7 @@ use pyo3::types::PyDict;
 
 use swarmkit_core::sandbox::{self, SandboxConfig, SandboxResult};
 use swarmkit_core::taskqueue::TaskStatus;
+use swarmkit_core::vectors::VectorStore as CoreVectorStore;
 use swarmkit_core::worker_pool::WorkerPool as CoreWorkerPool;
 
 fn sandbox_result_to_dict(py: Python<'_>, result: &SandboxResult) -> PyResult<Py<PyDict>> {
@@ -164,9 +165,63 @@ impl PyWorkerPool {
     }
 }
 
+/// A compact vector store (see swarmkit_core::vectors for the on-disk format
+/// and why HNSW is rebuilt lazily rather than incrementally maintained). All
+/// operations here are synchronous — they're fast in-memory/local-disk work,
+/// not I/O worth routing through the async runtime.
+#[pyclass(name = "VectorStore")]
+struct PyVectorStore {
+    inner: CoreVectorStore,
+}
+
+#[pymethods]
+impl PyVectorStore {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: CoreVectorStore::new(),
+        }
+    }
+
+    #[staticmethod]
+    fn load(path: String) -> PyResult<Self> {
+        let inner = CoreVectorStore::load(std::path::Path::new(&path))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    fn add(&mut self, id: String, vector: Vec<f32>) -> PyResult<()> {
+        self.inner
+            .add(id, vector)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    #[pyo3(signature = (query, k=10))]
+    fn search(&mut self, query: Vec<f32>, k: usize) -> PyResult<Vec<(String, f32)>> {
+        self.inner
+            .search(&query, k)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn save(&self, path: String) -> PyResult<()> {
+        self.inner
+            .save(std::path::Path::new(&path))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn on_disk_bytes(&self) -> usize {
+        self.inner.on_disk_bytes()
+    }
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_sandboxed, m)?)?;
     m.add_class::<PyWorkerPool>()?;
+    m.add_class::<PyVectorStore>()?;
     Ok(())
 }
