@@ -6,13 +6,36 @@ import os
 
 import click
 
-from swarmkit.agents.base import Agent, AgentConfig
+from swarmkit.agents.base import Agent, AgentConfig, Executor
+from swarmkit.agents.catalog import AgentCatalog
 from swarmkit.cli import daemon_client
 from swarmkit.cli.daemon_client import DaemonUnavailable
 from swarmkit.daemon import supervisor
 from swarmkit.daemon.server import DEFAULT_CONCURRENCY, pid_path, socket_path
+from swarmkit.swarm.coordinator import Coordinator
+from swarmkit.swarm.topology import Topology
 
 DEFAULT_MODEL = "claude-sonnet-5"
+DEFAULT_COORDINATOR_MODEL = "claude-opus-4-8"
+
+
+def _daemon_executor(jail_root: str, workdir: str, allowed: list[str]) -> Executor:
+    """A tool-call executor that submits to swarmkitd's worker pool and polls
+    until done — the daemon-mediated replacement for calling the sandbox
+    in-process, shared by `run` and `swarm run`."""
+
+    async def _execute(command: list[str]) -> dict:
+        status = await daemon_client.run_command(
+            command,
+            jail_root=jail_root,
+            workdir=workdir,
+            allowed_executables=allowed,
+        )
+        if status["status"] == "failed":
+            raise RuntimeError(status.get("error", "sandboxed command failed"))
+        return status["result"]
+
+    return _execute
 
 
 @click.group()
@@ -115,18 +138,7 @@ def run(goal: str, model: str, workdir: str, allowed: tuple[str, ...], concurren
         ),
     )
 
-    async def daemon_executor(command: list[str]) -> dict:
-        status = await daemon_client.run_command(
-            command,
-            jail_root=abs_workdir,
-            workdir=abs_workdir,
-            allowed_executables=list(allowed),
-        )
-        if status["status"] == "failed":
-            raise RuntimeError(status.get("error", "sandboxed command failed"))
-        return status["result"]
-
-    agent = Agent(config, executor=daemon_executor)
+    agent = Agent(config, executor=_daemon_executor(abs_workdir, abs_workdir, list(allowed)))
 
     async def _run() -> None:
         result = await agent.run(
@@ -143,6 +155,81 @@ def run(goal: str, model: str, workdir: str, allowed: tuple[str, ...], concurren
             f"daemon pid: {pid_path().read_text().strip() if pid_path().exists() else 'unknown'}\n"
             f"sandbox_calls: {json.dumps(result.sandbox_calls, indent=2)}"
         )
+
+    asyncio.run(_run())
+
+
+@cli.group()
+def swarm() -> None:
+    """Multi-agent swarm coordination (goal decomposition + concurrent dispatch)."""
+
+
+@swarm.command("run")
+@click.argument("goal")
+@click.option("--coordinator-model", default=DEFAULT_COORDINATOR_MODEL, show_default=True)
+@click.option(
+    "--topology",
+    type=click.Choice([t.value for t in Topology]),
+    default=Topology.STAR.value,
+    show_default=True,
+)
+@click.option(
+    "--workdir",
+    default=".",
+    show_default=True,
+    help="Sandbox jail root and working directory for every subtask.",
+)
+@click.option(
+    "--allow",
+    "allowed",
+    multiple=True,
+    default=("echo", "ls", "cat", "pwd"),
+    help="Executable names subtask agents' run_command tool may invoke.",
+)
+@click.option(
+    "--concurrency",
+    default=DEFAULT_CONCURRENCY,
+    show_default=True,
+    help="Worker pool size, used only if swarmkitd needs to be started for this run.",
+)
+def swarm_run(
+    goal: str,
+    coordinator_model: str,
+    topology: str,
+    workdir: str,
+    allowed: tuple[str, ...],
+    concurrency: int,
+) -> None:
+    """Decompose GOAL into subtasks and dispatch them to catalog agents
+    concurrently, through swarmkitd's Rust worker pool."""
+    abs_workdir = os.path.abspath(workdir)
+    supervisor.start(concurrency=concurrency)
+
+    catalog = AgentCatalog()
+    coordinator = Coordinator(
+        catalog,
+        coordinator_model=coordinator_model,
+        topology=Topology(topology),
+        executor=_daemon_executor(abs_workdir, abs_workdir, list(allowed)),
+    )
+
+    async def _run() -> None:
+        result = await coordinator.run(
+            goal,
+            jail_root=abs_workdir,
+            workdir=abs_workdir,
+            allowed_executables=list(allowed),
+        )
+        click.echo(f"decomposed into {len(result.subtasks)} subtask(s) ({topology} topology)\n")
+        for r in result.results:
+            status_label = "ok" if r.success else "FAILED quorum check"
+            click.echo(f"--- [{r.subtask.id}] {r.subtask.agent}: {status_label} ---")
+            click.echo(f"goal: {r.subtask.goal}")
+            click.echo(r.run.text)
+            if r.quorum is not None:
+                click.echo(f"quorum votes: {r.quorum.votes}")
+            click.echo("")
+        click.echo(f"overall: {'success' if result.success else 'FAILED'}")
 
     asyncio.run(_run())
 

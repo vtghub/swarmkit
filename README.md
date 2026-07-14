@@ -24,6 +24,7 @@ swarmkit is an attempt at the same feature surface — agents, swarm coordinatio
 - **Phase 0** (done): a single real agent — a real Anthropic call whose tool use runs as a real Rust-sandboxed subprocess.
 - **Phase 1** (done): `swarmkitd`, a background daemon owning a real Rust worker pool (`crates/swarmkit-core/src/{worker_pool,taskqueue}.rs`). `swarmkit run` now dispatches tool execution through the daemon over a Unix domain socket instead of running the subprocess in-process; `swarmkit daemon start|stop|status` and `swarmkit status` manage and inspect it. N tasks submitted at worker-pool concurrency N complete in ~max(latency), not sum(latency) — see `tests/unit/test_worker_pool.py`.
 - **Phase 2** (done): memory/RAG. `crates/swarmkit-core/src/vectors.rs` is a compact vector store (fixed-width binary format, `instant-distance` HNSW rebuilt lazily from it) exposed as `swarmkit._native.VectorStore`; `src/swarmkit/memory/store.py` is SQLite + FTS5 for text/keyword search; `src/swarmkit/memory/rag.py` combines both via Reciprocal Rank Fusion, then re-ranks with MMR for diversity. Measured ~1KB/entry on disk (`tests/unit/test_memory_vectors.py`), vs. Ruflo's reported ~5MB/entry — roughly 4,700x smaller, not just "10x". Embeddings are pluggable (`src/swarmkit/memory/embeddings.py`): a dependency-free `HashingEmbedder` for tests/offline use, and an optional `SentenceTransformerEmbedder` (`pip install 'swarmkit[embeddings]'`) for real semantic quality.
+- **Phase 3** (done): swarm coordination. `swarmkit swarm run "<goal>"` decomposes a goal into subtasks via the Anthropic API's structured output (`src/swarmkit/swarm/coordinator.py`), dispatches them concurrently to catalog agents (`src/swarmkit/agents/catalog.py` — 5 starter agents in `agents/definitions/*.yaml`: coder, reviewer, tester, docs, architect) through swarmkitd's Rust worker pool, and quorum-verifies (`src/swarmkit/swarm/consensus.py`) any subtask with a `verify_command` by re-running it across 3 independent replicas, accepting only on majority agreement — a real reliability mechanism instead of an unverifiable Raft/Byzantine/Gossip claim. The coordinator's context only ever sees agent name + description (a few hundred tokens, structurally incapable of carrying a full system prompt — see `tests/unit/test_agent_catalog.py`), the direct fix for Ruflo's ~300K-token default agent-catalog bloat.
 
 Nothing here should be assumed to work until its corresponding test/demo script is green; see `docs/PLAN.md` for the phase-by-phase build order and what "done" means for each remaining phase.
 
@@ -47,6 +48,9 @@ swarmkit daemon stop
 
 # Phase 2: memory/RAG demo (no API key or ML download needed)
 python scripts/demo_memory.py
+
+# Phase 3: decompose a goal into concurrent, quorum-verified subtasks
+swarmkit swarm run "add a one-line README note and verify it with cat README.md" --topology star
 ```
 
 ## License

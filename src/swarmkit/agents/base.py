@@ -18,6 +18,30 @@ from swarmkit.core.providers.anthropic_provider import AnthropicProvider
 Executor = Callable[[list[str]], Awaitable[dict[str, Any]]]
 
 
+def local_executor(
+    *,
+    jail_root: str,
+    workdir: str,
+    allowed_executables: list[str],
+    timeout_secs: float = 30.0,
+) -> Executor:
+    """The default in-process executor: calls the Rust sandbox directly, no
+    daemon required. Also reusable by anything else that needs to run a
+    single sandboxed command the same way an Agent's tool call would (e.g.
+    the swarm coordinator's quorum verification step)."""
+
+    async def _execute(command: list[str]) -> dict[str, Any]:
+        return await _native.run_sandboxed(
+            cmd=command,
+            jail_root=jail_root,
+            workdir=workdir,
+            allowed_executables=allowed_executables,
+            timeout_secs=timeout_secs,
+        )
+
+    return _execute
+
+
 @dataclass
 class AgentConfig:
     name: str
@@ -65,17 +89,12 @@ class Agent:
         timeout_secs: float = 30.0,
     ) -> AgentRunResult:
         sandbox_calls: list[dict[str, Any]] = []
-
-        async def default_executor(command: list[str]) -> dict[str, Any]:
-            return await _native.run_sandboxed(
-                cmd=command,
-                jail_root=jail_root,
-                workdir=workdir,
-                allowed_executables=allowed_executables,
-                timeout_secs=timeout_secs,
-            )
-
-        executor = self._executor or default_executor
+        executor = self._executor or local_executor(
+            jail_root=jail_root,
+            workdir=workdir,
+            allowed_executables=allowed_executables,
+            timeout_secs=timeout_secs,
+        )
 
         @beta_async_tool
         async def run_command(command: list[str]) -> str:

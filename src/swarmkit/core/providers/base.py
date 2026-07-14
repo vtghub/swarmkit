@@ -35,8 +35,13 @@ class Provider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         effort: str = "medium",
+        response_schema: dict[str, Any] | None = None,
     ) -> ProviderResponse:
-        """Run one non-streaming completion and return it."""
+        """Run one non-streaming completion and return it. `response_schema`,
+        when given, constrains the response to that JSON schema
+        (`output_config.format`) — used by the swarm coordinator's subtask
+        decomposition so its output is guaranteed-parseable, not regex-scraped
+        out of free text."""
 
     @abstractmethod
     async def count_tokens(

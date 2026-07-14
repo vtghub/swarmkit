@@ -22,14 +22,18 @@ class AnthropicProvider(Provider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         effort: str = "medium",
+        response_schema: dict[str, Any] | None = None,
     ) -> ProviderResponse:
+        output_config: dict[str, Any] = {"effort": effort}
+        if response_schema is not None:
+            output_config["format"] = {"type": "json_schema", "schema": response_schema}
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": 8192,
             "system": system,
             "messages": messages,
             "thinking": {"type": "adaptive"},
-            "output_config": {"effort": effort},
+            "output_config": output_config,
         }
         if tools:
             kwargs["tools"] = tools
