@@ -109,7 +109,7 @@ class Agent:
                 command: The argv vector to execute, e.g. ["echo", "hello"].
             """
             result = await executor(command)
-            sandbox_calls.append(result)
+            sandbox_calls.append({"command": command, **result})
             return json.dumps(result)
 
         runner = self.provider.client.beta.messages.tool_runner(

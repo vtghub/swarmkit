@@ -20,8 +20,23 @@ from swarmkit import _native
 from swarmkit.agents.base import Executor
 from swarmkit.agents.catalog import AgentCatalog
 from swarmkit.daemon.agent_tasks import AgentTaskRegistry
+from swarmkit.federation.identity import PeerRegistry, load_or_create_identity
+from swarmkit.federation.transport import build_federation_server
+from swarmkit.security.audit import AuditLog
 
 DEFAULT_CONCURRENCY = 8
+
+
+def audit_db_path() -> Path:
+    return runtime_dir() / "audit.db"
+
+
+def identity_key_path() -> Path:
+    return runtime_dir() / "identity.key"
+
+
+def peers_path() -> Path:
+    return runtime_dir() / "peers.json"
 
 
 def _pool_executor(
@@ -74,7 +89,10 @@ class Daemon:
     def __init__(self, concurrency: int = DEFAULT_CONCURRENCY) -> None:
         self.pool = _native.WorkerPool(concurrency)
         self.catalog = AgentCatalog()
-        self.agent_tasks = AgentTaskRegistry(self.catalog)
+        self.audit = AuditLog(audit_db_path())
+        self.agent_tasks = AgentTaskRegistry(self.catalog, audit=self.audit)
+        self.identity = load_or_create_identity(identity_key_path())
+        self.peers = PeerRegistry(peers_path())
 
     async def handle_request(self, request: dict[str, Any]) -> dict[str, Any]:
         cmd = request.get("cmd")
@@ -139,7 +157,11 @@ async def _handle_conn(
         writer.close()
 
 
-async def serve(concurrency: int = DEFAULT_CONCURRENCY) -> None:
+async def serve(
+    concurrency: int = DEFAULT_CONCURRENCY,
+    federation_host: str | None = None,
+    federation_port: int | None = None,
+) -> None:
     runtime_dir().mkdir(parents=True, exist_ok=True)
     sock = socket_path()
     if sock.exists():
@@ -151,6 +173,14 @@ async def serve(concurrency: int = DEFAULT_CONCURRENCY) -> None:
     )
     pid_path().write_text(str(os.getpid()))
 
+    federation_server = None
+    federation_task = None
+    if federation_port is not None:
+        federation_server = build_federation_server(
+            daemon.pool, daemon.peers, federation_host or "127.0.0.1", federation_port
+        )
+        federation_task = asyncio.create_task(federation_server.serve())
+
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -160,13 +190,21 @@ async def serve(concurrency: int = DEFAULT_CONCURRENCY) -> None:
         async with server:
             await stop_event.wait()
     finally:
+        if federation_server is not None:
+            federation_server.should_exit = True
+            assert federation_task is not None
+            await federation_task
+        daemon.audit.close()
         sock.unlink(missing_ok=True)
         pid_path().unlink(missing_ok=True)
 
 
 def main() -> None:
     concurrency = int(os.environ.get("SWARMKIT_CONCURRENCY", DEFAULT_CONCURRENCY))
-    asyncio.run(serve(concurrency))
+    federation_port_env = os.environ.get("SWARMKIT_FEDERATION_PORT")
+    federation_port = int(federation_port_env) if federation_port_env else None
+    federation_host = os.environ.get("SWARMKIT_FEDERATION_HOST", "127.0.0.1")
+    asyncio.run(serve(concurrency, federation_host=federation_host, federation_port=federation_port))
 
 
 if __name__ == "__main__":

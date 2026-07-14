@@ -41,7 +41,11 @@ def is_running() -> int | None:
     return pid
 
 
-def start(concurrency: int = 8) -> int:
+def start(
+    concurrency: int = 8,
+    federation_host: str | None = None,
+    federation_port: int | None = None,
+) -> int:
     """Start swarmkitd if it isn't already running. Returns its real pid."""
     existing = is_running()
     if existing is not None:
@@ -50,6 +54,10 @@ def start(concurrency: int = 8) -> int:
     pid_path().parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["SWARMKIT_CONCURRENCY"] = str(concurrency)
+    if federation_port is not None:
+        env["SWARMKIT_FEDERATION_PORT"] = str(federation_port)
+        if federation_host is not None:
+            env["SWARMKIT_FEDERATION_HOST"] = federation_host
     proc = subprocess.Popen(
         [sys.executable, "-m", "swarmkit.daemon.server"],
         env=env,

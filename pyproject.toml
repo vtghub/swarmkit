@@ -14,6 +14,10 @@ dependencies = [
     "click>=8.1",
     "pyyaml>=6.0",
     "mcp>=1.28",
+    "cryptography>=42",
+    "starlette>=0.37",
+    "uvicorn>=0.30",
+    "httpx>=0.25",
 ]
 
 [project.optional-dependencies]

@@ -20,6 +20,7 @@ from typing import Any
 
 from swarmkit.agents.base import Agent, AgentConfig, Executor
 from swarmkit.agents.catalog import AgentCatalog
+from swarmkit.security.audit import AuditLog
 
 
 @dataclass
@@ -30,8 +31,9 @@ class AgentTaskStatus:
 
 
 class AgentTaskRegistry:
-    def __init__(self, catalog: AgentCatalog) -> None:
+    def __init__(self, catalog: AgentCatalog, audit: AuditLog | None = None) -> None:
         self._catalog = catalog
+        self._audit = audit
         self._statuses: dict[str, AgentTaskStatus] = {}
         self._tasks: dict[str, asyncio.Task] = {}
 
@@ -90,6 +92,14 @@ class AgentTaskRegistry:
                     "sandbox_calls": result.sandbox_calls,
                 },
             )
+            if self._audit is not None:
+                await self._audit.record_agent_run(
+                    model=definition.default_model,
+                    request_id=result.request_id,
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
+                    sandbox_calls=result.sandbox_calls,
+                )
         except Exception as e:  # noqa: BLE001 - surface any failure via status, don't crash the daemon
             self._statuses[task_id] = AgentTaskStatus(status="failed", error=str(e))
 

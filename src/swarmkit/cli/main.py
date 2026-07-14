@@ -11,8 +11,17 @@ from swarmkit.agents.catalog import AgentCatalog
 from swarmkit.cli import daemon_client
 from swarmkit.cli.daemon_client import DaemonUnavailable
 from swarmkit.daemon import supervisor
-from swarmkit.daemon.server import DEFAULT_CONCURRENCY, pid_path, socket_path
+from swarmkit.daemon.server import (
+    DEFAULT_CONCURRENCY,
+    audit_db_path,
+    identity_key_path,
+    peers_path,
+    pid_path,
+    socket_path,
+)
+from swarmkit.federation.identity import PeerRegistry, load_or_create_identity
 from swarmkit.mcp_server import client_tools
+from swarmkit.security.audit import AuditLog
 from swarmkit.swarm.coordinator import Coordinator
 from swarmkit.swarm.topology import Topology
 
@@ -60,10 +69,21 @@ def daemon() -> None:
 
 @daemon.command("start")
 @click.option("--concurrency", default=DEFAULT_CONCURRENCY, show_default=True)
-def daemon_start(concurrency: int) -> None:
+@click.option(
+    "--federation-port",
+    type=int,
+    default=None,
+    help="If set, also listen for signed cross-daemon task requests on this port.",
+)
+@click.option("--federation-host", default="127.0.0.1", show_default=True)
+def daemon_start(concurrency: int, federation_port: int | None, federation_host: str) -> None:
     """Start swarmkitd if it isn't already running."""
-    pid = supervisor.start(concurrency=concurrency)
+    pid = supervisor.start(
+        concurrency=concurrency, federation_host=federation_host, federation_port=federation_port
+    )
     click.echo(f"swarmkitd running (pid {pid}, socket {socket_path()})")
+    if federation_port is not None:
+        click.echo(f"federation listener on {federation_host}:{federation_port}")
 
 
 @daemon.command("stop")
@@ -99,6 +119,82 @@ def status() -> None:
         return
     for task_id, task in tasks:
         click.echo(f"{task_id}: {json.dumps(task)}")
+
+
+@cli.command("identity")
+def identity_show() -> None:
+    """Show this daemon's ed25519 public key — give this to other operators
+    so they can `swarmkit peer add` you. Generates the identity on first
+    call if it doesn't exist yet; no daemon needs to be running."""
+    identity = load_or_create_identity(identity_key_path())
+    click.echo(identity.public_key_hex)
+
+
+@cli.group()
+def peer() -> None:
+    """Manage explicitly-registered federation peers (no auto-discovery:
+    a peer exists only because you ran `peer add` with its public key,
+    exchanged out-of-band)."""
+
+
+@peer.command("add")
+@click.argument("name")
+@click.argument("host")
+@click.argument("port", type=int)
+@click.argument("public_key_hex")
+def peer_add(name: str, host: str, port: int, public_key_hex: str) -> None:
+    """Register a peer daemon by name, address, and its public key (as shown
+    by that daemon's `swarmkit identity`)."""
+    registry = PeerRegistry(peers_path())
+    registry.add(name, host, port, public_key_hex)
+    click.echo(f"added peer {name!r} ({host}:{port})")
+
+
+@peer.command("list")
+def peer_list() -> None:
+    """List registered peers."""
+    registry = PeerRegistry(peers_path())
+    peers = registry.list()
+    if not peers:
+        click.echo("no peers registered")
+        return
+    for p in peers:
+        click.echo(f"{p.name}: {p.host}:{p.port} ({p.public_key_hex[:16]}...)")
+
+
+@peer.command("remove")
+@click.argument("name")
+def peer_remove(name: str) -> None:
+    """Remove a registered peer by name."""
+    registry = PeerRegistry(peers_path())
+    if registry.remove(name):
+        click.echo(f"removed peer {name!r}")
+    else:
+        click.echo(f"no such peer {name!r}")
+        raise SystemExit(1)
+
+
+@cli.command()
+@click.option("--event-type", type=click.Choice(["tool_call", "provider_request"]), default=None)
+@click.option("--limit", default=20, show_default=True)
+def audit(event_type: str | None, limit: int) -> None:
+    """Show recent audit log entries (every sandboxed subprocess execution
+    and every Anthropic provider request — see security/audit.py). Reads the
+    log file directly; no daemon needs to be running."""
+
+    async def _query() -> list[dict]:
+        log = AuditLog(audit_db_path())
+        try:
+            return await log.query(event_type=event_type, limit=limit)
+        finally:
+            log.close()
+
+    entries = asyncio.run(_query())
+    if not entries:
+        click.echo("no audit entries")
+        return
+    for e in entries:
+        click.echo(f"[{e['id']}] {e['event_type']} @ {e['timestamp']:.3f}: {json.dumps(e['details'])}")
 
 
 @cli.command()
@@ -156,6 +252,18 @@ def run(goal: str, model: str, workdir: str, allowed: tuple[str, ...], concurren
             f"daemon pid: {pid_path().read_text().strip() if pid_path().exists() else 'unknown'}\n"
             f"sandbox_calls: {json.dumps(result.sandbox_calls, indent=2)}"
         )
+
+        audit = AuditLog(audit_db_path())
+        try:
+            await audit.record_agent_run(
+                model=model,
+                request_id=result.request_id,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                sandbox_calls=result.sandbox_calls,
+            )
+        finally:
+            audit.close()
 
     asyncio.run(_run())
 
@@ -222,14 +330,29 @@ def swarm_run(
             allowed_executables=list(allowed),
         )
         click.echo(f"decomposed into {len(result.subtasks)} subtask(s) ({topology} topology)\n")
-        for r in result.results:
-            status_label = "ok" if r.success else "FAILED quorum check"
-            click.echo(f"--- [{r.subtask.id}] {r.subtask.agent}: {status_label} ---")
-            click.echo(f"goal: {r.subtask.goal}")
-            click.echo(r.run.text)
-            if r.quorum is not None:
-                click.echo(f"quorum votes: {r.quorum.votes}")
-            click.echo("")
+
+        audit = AuditLog(audit_db_path())
+        try:
+            for r in result.results:
+                status_label = "ok" if r.success else "FAILED quorum check"
+                click.echo(f"--- [{r.subtask.id}] {r.subtask.agent}: {status_label} ---")
+                click.echo(f"goal: {r.subtask.goal}")
+                click.echo(r.run.text)
+                if r.quorum is not None:
+                    click.echo(f"quorum votes: {r.quorum.votes}")
+                click.echo("")
+
+                definition = catalog.load(r.subtask.agent)
+                await audit.record_agent_run(
+                    model=definition.default_model,
+                    request_id=r.run.request_id,
+                    input_tokens=r.run.input_tokens,
+                    output_tokens=r.run.output_tokens,
+                    sandbox_calls=r.run.sandbox_calls,
+                )
+        finally:
+            audit.close()
+
         click.echo(f"overall: {'success' if result.success else 'FAILED'}")
 
     asyncio.run(_run())
