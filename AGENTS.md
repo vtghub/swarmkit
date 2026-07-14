@@ -46,7 +46,7 @@ SQLite (`memory.db`) + FTS5 for keyword search, a compact Rust-backed
 vector store (`vectors.bin`, fixed-width binary format, lazy `instant-distance`
 HNSW) for semantic search. Retrieval combines both via Reciprocal Rank
 Fusion, then re-ranks with MMR for diversity. Measured at ~1KB/entry on
-disk — orders of magnitude smaller than Ruflo's reported ~5MB/entry.
+disk, tracked by a CI benchmark so storage growth doesn't silently regress.
 Embeddings are pluggable: a dependency-free `HashingEmbedder` by default, or
 `SentenceTransformerEmbedder` (`pip install 'swarmkit[embeddings]'`) for
 real semantic quality.

@@ -35,7 +35,7 @@ async def main() -> None:
         vectors.save(str(vec_path))
         bytes_per_entry = vectors.on_disk_bytes() / len(vectors)
         print(f"stored 3 memories; vector store is {vectors.on_disk_bytes()} bytes "
-              f"({bytes_per_entry:.1f} bytes/entry, vs. Ruflo's reported ~5,000,000)")
+              f"({bytes_per_entry:.1f} bytes/entry)")
         store.close()
 
         # --- simulate a process restart: fresh objects, same files on disk ---

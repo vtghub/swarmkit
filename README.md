@@ -1,18 +1,8 @@
 # swarmkit
 
-A multi-agent orchestration system for Claude Code/Codex-style workflows — agents, swarms, memory/RAG, and MCP tool integration — built on one rule: **no capability ships unless a test observes a real, external side effect proving it happened.**
+A multi-agent orchestration system for Claude Code/Codex-style workflows: agents, swarm coordination, memory/RAG, MCP client+server integration, an append-only audit log, and minimal cross-daemon federation — built on one rule: **no capability ships unless a test observes a real, external side effect proving it happened** (a real subprocess PID, a real Anthropic `request_id`, a measured byte size, measured wall-clock concurrency).
 
-## Why this exists
-
-[Ruflo](https://github.com/ruvnet/ruflo) (formerly `claude-flow`) popularized the "agent meta-harness" idea, but an independent audit and its own issue tracker found the implementation didn't match the pitch:
-
-- ~290 of ~300 advertised MCP tools write a JSON record and execute nothing ([audit](https://gist.github.com/roman-rr/ed603b676af019b8740423d2bb8e4bf6)).
-- `agent_spawn` doesn't fork a real subprocess/worker — it registers state.
-- 106 agent definitions load into context by default (~300K tokens), most referencing MCP servers that don't exist in a standard install ([#1504](https://github.com/ruvnet/ruflo/issues/1504)).
-- The memory/graph layer uses ~100MB of storage for 20 entries.
-- Onboarding is a paradox of choice across install paths and commands ([#1196](https://github.com/ruvnet/ruflo/issues/1196)).
-
-swarmkit is an attempt at the same feature surface — agents, swarm coordination, memory/RAG, MCP client+server, minimal federation, security guardrails — built so each capability is verifiably real rather than assumed. See the architecture and build order in [`docs/PLAN.md`](docs/PLAN.md).
+Every claim in this README is backed by a test or demo script named next to it. See the full architecture and build order in [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Architecture at a glance
 
@@ -59,7 +49,7 @@ SQLite (`memory.db`) + FTS5 for keyword search, a compact Rust-backed
 vector store (`vectors.bin`, fixed-width binary format, lazy `instant-distance`
 HNSW) for semantic search. Retrieval combines both via Reciprocal Rank
 Fusion, then re-ranks with MMR for diversity. Measured at ~1KB/entry on
-disk — orders of magnitude smaller than Ruflo's reported ~5MB/entry.
+disk, tracked by a CI benchmark so storage growth doesn't silently regress.
 Embeddings are pluggable: a dependency-free `HashingEmbedder` by default, or
 `SentenceTransformerEmbedder` (`pip install 'swarmkit[embeddings]'`) for
 real semantic quality.
@@ -103,7 +93,7 @@ deferred are tracked in [`docs/PLAN.md`](docs/PLAN.md#build-order):
 
 - **Phase 0** (done): single real agent — Anthropic call + Rust-sandboxed subprocess tool execution.
 - **Phase 1** (done): `swarmkitd` background daemon + real Rust worker pool; N tasks at concurrency N complete in ~max(latency), not sum — `tests/unit/test_worker_pool.py`.
-- **Phase 2** (done): memory/RAG; measured ~1KB/entry on disk, ~4,700x smaller than Ruflo's reported ~5MB/entry — `tests/unit/test_memory_vectors.py`.
+- **Phase 2** (done): memory/RAG; measured ~1KB/entry on disk, tracked by a CI benchmark — `tests/unit/test_memory_vectors.py`.
 - **Phase 3** (done): swarm coordination + lazy agent catalog — `tests/unit/test_agent_catalog.py`.
 - **Phase 4** (done): MCP integration, both directions, verified against the real `vtghub/mcp-native-core` binary.
 - **Phase 5** (done, v1 complete): security hardening + minimal federation, verified against two real `swarmkitd` OS processes — `tests/integration/test_federation_lifecycle.py`.

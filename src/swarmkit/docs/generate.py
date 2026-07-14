@@ -1,12 +1,11 @@
 """Generates a lean AGENTS.md/CLAUDE.md for a swarmkit-using project.
 
-This is the direct fix for Ruflo's documented ~60%-boilerplate agent doc: the
-one part of this file that scales with catalog size — the agent list — is
-rendered from `AgentCatalog.render_summary()`, the same name+description-only
-view the coordinator itself sees. It structurally cannot balloon into 300K
-tokens of persona text, because the catalog itself never loads persona text
-until an agent is actually spawned. Everything else below is a short,
-current description of swarmkit's real (not aspirational) v1 feature
+The one part of this file that scales with catalog size — the agent list —
+is rendered from `AgentCatalog.render_summary()`, the same name+description-
+only view the coordinator itself sees. It structurally cannot balloon into
+a large block of persona text, because the catalog itself never loads
+persona text until an agent is actually spawned. Everything else below is a
+short, current description of swarmkit's real (not aspirational) v1 feature
 surface: single-agent runs, swarm coordination, memory/RAG, MCP, security,
 and federation.
 """
@@ -59,7 +58,7 @@ SQLite (`memory.db`) + FTS5 for keyword search, a compact Rust-backed
 vector store (`vectors.bin`, fixed-width binary format, lazy `instant-distance`
 HNSW) for semantic search. Retrieval combines both via Reciprocal Rank
 Fusion, then re-ranks with MMR for diversity. Measured at ~1KB/entry on
-disk — orders of magnitude smaller than Ruflo's reported ~5MB/entry.
+disk, tracked by a CI benchmark so storage growth doesn't silently regress.
 Embeddings are pluggable: a dependency-free `HashingEmbedder` by default, or
 `SentenceTransformerEmbedder` (`pip install 'swarmkit[embeddings]'`) for
 real semantic quality."""
