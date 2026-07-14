@@ -107,13 +107,72 @@ fn apply_rlimits(_cmd_builder: &mut Command, _cpu_seconds: Option<u64>, _memory_
     // Resource limits are unix-only (RLIMIT_CPU/RLIMIT_AS have no Windows equivalent here).
 }
 
-/// Run `cmd` under the sandbox: allowlist-checked, jailed to a working directory,
-/// wall-clock and (on unix) resource limited. Returns the real child PID regardless
-/// of whether the process completes, times out, or is killed.
-pub async fn run_sandboxed(
-    cmd: Vec<String>,
-    config: &SandboxConfig,
-) -> Result<SandboxResult, SandboxError> {
+/// A process that has been spawned (allowlist + jail already enforced) but whose
+/// output/exit hasn't been awaited yet. Splitting spawn from wait lets a caller
+/// (the worker pool) observe the real PID the instant it exists, rather than
+/// only after the process finishes.
+pub struct SpawnedProcess {
+    child: tokio::process::Child,
+    pid: u32,
+    started: std::time::Instant,
+}
+
+impl SpawnedProcess {
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Wait for the process to finish (or be killed on `timeout`), collecting
+    /// its output. Consumes self — a spawned process can only be waited on once.
+    pub async fn wait(mut self, timeout_duration: Duration) -> Result<SandboxResult, SandboxError> {
+        let pid = self.pid;
+        let start = self.started;
+        let mut stdout_pipe = self.child.stdout.take().expect("stdout was piped");
+        let mut stderr_pipe = self.child.stderr.take().expect("stderr was piped");
+
+        let run = async {
+            let mut stdout_buf = String::new();
+            let mut stderr_buf = String::new();
+            let (stdout_res, stderr_res, status_res) = tokio::join!(
+                stdout_pipe.read_to_string(&mut stdout_buf),
+                stderr_pipe.read_to_string(&mut stderr_buf),
+                self.child.wait(),
+            );
+            stdout_res.map_err(SandboxError::IoError)?;
+            stderr_res.map_err(SandboxError::IoError)?;
+            let status = status_res.map_err(SandboxError::IoError)?;
+            Ok::<_, SandboxError>((stdout_buf, stderr_buf, status))
+        };
+
+        match timeout(timeout_duration, run).await {
+            Ok(Ok((stdout, stderr, status))) => Ok(SandboxResult {
+                pid,
+                exit_code: status.code(),
+                stdout,
+                stderr,
+                timed_out: false,
+                duration_ms: start.elapsed().as_millis() as u64,
+            }),
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                // Timed out: the child is killed via kill_on_drop when `self.child`
+                // drops here, but we still report the real pid that was running.
+                Ok(SandboxResult {
+                    pid,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    timed_out: true,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                })
+            }
+        }
+    }
+}
+
+/// Allowlist-check, jail-check, and spawn `cmd`. Returns as soon as the OS process
+/// exists — call `.wait()` on the result to run to completion.
+pub fn spawn_sandboxed(cmd: Vec<String>, config: &SandboxConfig) -> Result<SpawnedProcess, SandboxError> {
     if cmd.is_empty() {
         return Err(SandboxError::EmptyCommand);
     }
@@ -130,50 +189,23 @@ pub async fn run_sandboxed(
         .kill_on_drop(true);
     apply_rlimits(&mut builder, config.cpu_seconds, config.memory_bytes);
 
-    let start = std::time::Instant::now();
-    let mut child = builder.spawn().map_err(SandboxError::SpawnFailed)?;
+    let started = std::time::Instant::now();
+    let child = builder.spawn().map_err(SandboxError::SpawnFailed)?;
     let pid = child.id().expect("spawned child must have a pid");
 
-    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
-    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
+    Ok(SpawnedProcess { child, pid, started })
+}
 
-    let run = async {
-        let mut stdout_buf = String::new();
-        let mut stderr_buf = String::new();
-        let (stdout_res, stderr_res, status_res) = tokio::join!(
-            stdout_pipe.read_to_string(&mut stdout_buf),
-            stderr_pipe.read_to_string(&mut stderr_buf),
-            child.wait(),
-        );
-        stdout_res.map_err(SandboxError::IoError)?;
-        stderr_res.map_err(SandboxError::IoError)?;
-        let status = status_res.map_err(SandboxError::IoError)?;
-        Ok::<_, SandboxError>((stdout_buf, stderr_buf, status))
-    };
-
-    match timeout(config.timeout, run).await {
-        Ok(Ok((stdout, stderr, status))) => Ok(SandboxResult {
-            pid,
-            exit_code: status.code(),
-            stdout,
-            stderr,
-            timed_out: false,
-            duration_ms: start.elapsed().as_millis() as u64,
-        }),
-        Ok(Err(e)) => Err(e),
-        Err(_) => {
-            // Timed out: the child is killed via kill_on_drop when `child` drops here,
-            // but we still report the real pid that was actually running.
-            Ok(SandboxResult {
-                pid,
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                timed_out: true,
-                duration_ms: start.elapsed().as_millis() as u64,
-            })
-        }
-    }
+/// Run `cmd` under the sandbox to completion: allowlist-checked, jailed to a
+/// working directory, wall-clock and (on unix) resource limited. Convenience
+/// wrapper over `spawn_sandboxed` + `wait` for callers that don't need the
+/// pid before completion (e.g. a single agent's own tool calls).
+pub async fn run_sandboxed(
+    cmd: Vec<String>,
+    config: &SandboxConfig,
+) -> Result<SandboxResult, SandboxError> {
+    let spawned = spawn_sandboxed(cmd, config)?;
+    spawned.wait(config.timeout).await
 }
 
 #[cfg(test)]

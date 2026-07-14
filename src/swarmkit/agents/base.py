@@ -6,6 +6,7 @@ pretending a subprocess ran.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,6 +14,8 @@ from anthropic import beta_async_tool
 
 from swarmkit import _native
 from swarmkit.core.providers.anthropic_provider import AnthropicProvider
+
+Executor = Callable[[list[str]], Awaitable[dict[str, Any]]]
 
 
 @dataclass
@@ -35,11 +38,22 @@ class AgentRunResult:
 class Agent:
     """Runs one goal to completion via the Anthropic tool runner, with a single
     `run_command` tool backed by the Rust sandbox (real PID, real jail, real
-    timeout — see crates/swarmkit-core/src/sandbox.rs)."""
+    timeout — see crates/swarmkit-core/src/sandbox.rs).
 
-    def __init__(self, config: AgentConfig, provider: AnthropicProvider | None = None) -> None:
+    By default the tool calls `_native.run_sandboxed` directly, in-process
+    (Phase 0 behavior — works standalone, no daemon required). Pass `executor`
+    to route tool calls elsewhere instead — e.g. through swarmkitd's worker
+    pool, for real daemon-mediated execution (see cli/main.py)."""
+
+    def __init__(
+        self,
+        config: AgentConfig,
+        provider: AnthropicProvider | None = None,
+        executor: Executor | None = None,
+    ) -> None:
         self.config = config
         self.provider = provider or AnthropicProvider()
+        self._executor = executor
 
     async def run(
         self,
@@ -52,6 +66,17 @@ class Agent:
     ) -> AgentRunResult:
         sandbox_calls: list[dict[str, Any]] = []
 
+        async def default_executor(command: list[str]) -> dict[str, Any]:
+            return await _native.run_sandboxed(
+                cmd=command,
+                jail_root=jail_root,
+                workdir=workdir,
+                allowed_executables=allowed_executables,
+                timeout_secs=timeout_secs,
+            )
+
+        executor = self._executor or default_executor
+
         @beta_async_tool
         async def run_command(command: list[str]) -> str:
             """Run an allowlisted shell command in the agent's sandboxed working directory.
@@ -59,13 +84,7 @@ class Agent:
             Args:
                 command: The argv vector to execute, e.g. ["echo", "hello"].
             """
-            result = await _native.run_sandboxed(
-                cmd=command,
-                jail_root=jail_root,
-                workdir=workdir,
-                allowed_executables=allowed_executables,
-                timeout_secs=timeout_secs,
-            )
+            result = await executor(command)
             sandbox_calls.append(result)
             return json.dumps(result)
 
