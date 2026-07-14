@@ -1,0 +1,14 @@
+[package]
+name = "swarmkit-py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+swarmkit-core = { path = "../swarmkit-core" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

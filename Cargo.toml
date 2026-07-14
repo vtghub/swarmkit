@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/swarmkit-core", "crates/swarmkit-py"]
+
+[profile.release]
+lto = true
+codegen-units = 1
