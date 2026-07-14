@@ -36,6 +36,6 @@ def test_bytes_per_entry_is_low_single_digit_kb(tmp_path):
     store.save(str(path))
 
     bytes_per_entry = store.on_disk_bytes() / len(store)
-    # Ruflo reportedly uses ~100MB for 20 entries (~5MB/entry) — this format
-    # is comfortably under 2KB/entry, roughly three orders of magnitude smaller.
+    # Fixed-width binary format keeps this comfortably under 2KB/entry
+    # regardless of entry count.
     assert bytes_per_entry < 2048, f"expected <2KB/entry, got {bytes_per_entry:.1f}"

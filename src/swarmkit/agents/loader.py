@@ -3,8 +3,9 @@
 Lazy loading is structural, not just a token-counting convention:
 `list_summaries` parses each file but returns only `AgentSummary` (name +
 description) — there is no code path from a summary back to
-`system_prompt`/`allowed_tools` without a separate `load()` call. This is the
-direct, testable fix for Ruflo's ~300K-token default agent-catalog bloat.
+`system_prompt`/`allowed_tools` without a separate `load()` call. This keeps
+the catalog's context footprint small and testable regardless of how many
+agents are defined.
 """
 
 from __future__ import annotations

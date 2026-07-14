@@ -1,10 +1,8 @@
 //! A real worker pool: `concurrency` tokio tasks, each pulling jobs off one
-//! shared queue and executing them as actual sandboxed OS subprocesses. This is
-//! the direct fix for Ruflo's `agent_spawn` — which registers a JSON record
-//! instead of forking real, concurrent work. Here, N submitted jobs at
-//! `concurrency` >= N genuinely run in parallel (see the concurrency proof
-//! test in `tests/unit/test_worker_pool.py`), and `TaskStatus::Running` carries
-//! a real OS pid the moment the process starts.
+//! shared queue and executing them as actual sandboxed OS subprocesses. N
+//! submitted jobs at `concurrency` >= N genuinely run in parallel (see the
+//! concurrency proof test in `tests/unit/test_worker_pool.py`), and
+//! `TaskStatus::Running` carries a real OS pid the moment the process starts.
 
 use std::sync::Arc;
 

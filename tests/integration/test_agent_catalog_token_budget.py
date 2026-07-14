@@ -37,7 +37,7 @@ async def test_catalog_summary_stays_within_a_small_token_budget():
 async def test_adding_many_bloated_agents_does_not_blow_the_token_budget(tmp_path):
     """Simulates a much larger personal agent library — since only
     name+description enters the summary, even 50 additional agents with huge
-    personas shouldn't approach Ruflo's reported ~300K-token default bloat."""
+    personas shouldn't meaningfully move the token budget."""
     client = AsyncAnthropic()
     for i in range(50):
         definition = {

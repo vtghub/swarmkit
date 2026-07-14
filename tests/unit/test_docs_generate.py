@@ -1,7 +1,7 @@
 """Proves docs/generate.py emits a lean, non-boilerplate AGENTS.md/CLAUDE.md
 whose agent-catalog section is rendered from the live catalog (so it never
-balloons past what's actually installed — the direct fix for Ruflo's
-~300K-token default agent doc) and that both files are byte-identical."""
+balloons past what's actually installed, regardless of catalog size) and
+that both files are byte-identical."""
 
 from __future__ import annotations
 

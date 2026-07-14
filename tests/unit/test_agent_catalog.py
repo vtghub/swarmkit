@@ -1,8 +1,8 @@
 """Agent catalog laziness: the coordinator's context only ever sees
 name+description. This is a structural guarantee (AgentSummary has no
 system_prompt/allowed_tools fields at all), not just a token-count
-convention — the direct, testable fix for Ruflo's ~300K-token default
-agent-catalog bloat.
+convention, so the catalog's context footprint stays small regardless of
+how many agents are defined.
 """
 
 from __future__ import annotations

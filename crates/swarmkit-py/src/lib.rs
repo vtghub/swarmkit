@@ -85,10 +85,10 @@ fn run_sandboxed<'py>(
 }
 
 /// A pool of `concurrency` real workers, each executing sandboxed subprocess
-/// jobs pulled off one shared queue. This is the Phase 1 fix for Ruflo's fake
-/// `agent_spawn`: `submit` returns a task id immediately, `status` reflects a
-/// real OS pid the moment a worker actually starts the process, and N jobs at
-/// concurrency >= N run genuinely in parallel (see tests/unit/test_worker_pool.py).
+/// jobs pulled off one shared queue: `submit` returns a task id immediately,
+/// `status` reflects a real OS pid the moment a worker actually starts the
+/// process, and N jobs at concurrency >= N run genuinely in parallel (see
+/// tests/unit/test_worker_pool.py).
 #[pyclass(name = "WorkerPool")]
 struct PyWorkerPool {
     inner: CoreWorkerPool,

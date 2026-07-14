@@ -1,7 +1,6 @@
 """Concurrency proof: N tasks dispatched through the Rust worker pool complete
-in ~max(latency), not sum(latency) — the direct test of Ruflo's fake
-concurrency, where `agent_spawn` registers JSON instead of running work in
-parallel.
+in ~max(latency), not sum(latency) — real parallel execution, not just
+registered state.
 """
 
 from __future__ import annotations

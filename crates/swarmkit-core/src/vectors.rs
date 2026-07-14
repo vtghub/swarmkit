@@ -1,7 +1,6 @@
-//! Compact in-process vector store. This is the layer most exposed to Ruflo's
-//! "~100MB for 20 entries" memory bloat — the fix is a fixed-width binary
-//! on-disk format (no per-entry JSON/object framing) plus an in-memory HNSW
-//! index (`instant-distance`) rebuilt from that compact source of truth.
+//! Compact in-process vector store: a fixed-width binary on-disk format (no
+//! per-entry JSON/object framing) plus an in-memory HNSW index
+//! (`instant-distance`) rebuilt from that compact source of truth.
 //!
 //! `instant-distance` only supports building an index from a fixed batch, not
 //! incremental insertion, so the index is treated as a cache: it's rebuilt
@@ -129,8 +128,8 @@ impl VectorStore {
     }
 
     /// Fixed-width binary format: [dim: u32][count: u32]{[id_len: u32][id bytes][dim * f32]}*
-    /// No JSON, no per-entry object framing — this is the direct fix for
-    /// Ruflo's reported ~100MB-for-20-entries memory bloat.
+    /// No JSON, no per-entry object framing — keeps on-disk size low and
+    /// predictable regardless of entry count.
     pub fn save(&self, path: &Path) -> Result<(), VectorError> {
         let dim = self.dim.unwrap_or(0) as u32;
         let mut buf = Vec::with_capacity(self.on_disk_bytes());
@@ -191,7 +190,7 @@ impl VectorStore {
     }
 
     /// Exact byte size of the on-disk format `save` produces — the metric the
-    /// bytes-per-entry benchmark checks against Ruflo's reported ratio.
+    /// bytes-per-entry benchmark tracks over time.
     pub fn on_disk_bytes(&self) -> usize {
         let dim = self.dim.unwrap_or(0);
         8 + self
@@ -273,9 +272,8 @@ mod tests {
             store.add(format!("memory-{i}"), vector).unwrap();
         }
         let bytes_per_entry = store.on_disk_bytes() as f64 / store.len() as f64;
-        // Ruflo reportedly uses ~100MB for 20 entries (~5MB/entry). This format
-        // is dim*4 + id overhead bytes/entry — comfortably under 2KB, not just
-        // "10x smaller" but roughly 3 orders of magnitude smaller.
+        // dim*4 + id overhead bytes/entry — comfortably under 2KB regardless
+        // of entry count, tracked here so a regression would be caught.
         assert!(
             bytes_per_entry < 2048.0,
             "expected < 2KB/entry, got {bytes_per_entry:.1} bytes/entry"

@@ -1,13 +1,12 @@
 """Quorum/majority-vote verification for correctness-sensitive subtasks.
 
-Ruflo claims Raft/Byzantine/Gossip consensus inside a framework with no real
-distributed runtime underneath — an unverifiable claim at that scale. For a
-single-daemon swarm, no distributed-consensus claim would be honest either.
-Instead: a correctness-sensitive subtask's verification command (e.g. "run
-the test suite") is dispatched to N independent replicas concurrently, and
-accepted only on strict-majority agreement over (exit_code, stdout). This
-catches flaky/nondeterministic results — a real reliability benefit — without
-pretending to solve distributed leader election.
+For a single-daemon swarm, a Raft/Byzantine/Gossip consensus claim would be
+unverifiable at this scale. Instead: a correctness-sensitive subtask's
+verification command (e.g. "run the test suite") is dispatched to N
+independent replicas concurrently, and accepted only on strict-majority
+agreement over (exit_code, stdout). This catches flaky/nondeterministic
+results — a real reliability benefit — without pretending to solve
+distributed leader election.
 """
 
 from __future__ import annotations
