@@ -17,8 +17,41 @@ from pathlib import Path
 from typing import Any
 
 from swarmkit import _native
+from swarmkit.agents.base import Executor
+from swarmkit.agents.catalog import AgentCatalog
+from swarmkit.daemon.agent_tasks import AgentTaskRegistry
 
 DEFAULT_CONCURRENCY = 8
+
+
+def _pool_executor(
+    pool: "_native.WorkerPool",
+    jail_root: str,
+    workdir: str,
+    allowed_executables: list[str],
+    timeout_secs: float = 30.0,
+) -> Executor:
+    """An in-process equivalent of daemon_client.run_command: submits to the
+    given WorkerPool and polls until done, without a socket round-trip (used
+    for tool calls made by agent tasks running inside the daemon itself)."""
+
+    async def _execute(command: list[str]) -> dict[str, Any]:
+        task_id = await pool.submit(
+            cmd=command,
+            jail_root=jail_root,
+            workdir=workdir,
+            allowed_executables=allowed_executables,
+            timeout_secs=timeout_secs,
+        )
+        while True:
+            status = await pool.status(task_id)
+            if status["status"] == "completed":
+                return status["result"]
+            if status["status"] == "failed":
+                raise RuntimeError(status["error"])
+            await asyncio.sleep(0.02)
+
+    return _execute
 
 
 def runtime_dir() -> Path:
@@ -34,10 +67,14 @@ def pid_path() -> Path:
 
 
 class Daemon:
-    """Wraps one native WorkerPool and answers JSON-line requests about it."""
+    """Wraps one native WorkerPool (sandboxed command tasks) and one
+    AgentTaskRegistry (LLM-driven agent-run tasks) and answers JSON-line
+    requests about both."""
 
     def __init__(self, concurrency: int = DEFAULT_CONCURRENCY) -> None:
         self.pool = _native.WorkerPool(concurrency)
+        self.catalog = AgentCatalog()
+        self.agent_tasks = AgentTaskRegistry(self.catalog)
 
     async def handle_request(self, request: dict[str, Any]) -> dict[str, Any]:
         cmd = request.get("cmd")
@@ -59,6 +96,28 @@ class Daemon:
         if cmd == "list_tasks":
             tasks = await self.pool.list_tasks()
             return {"ok": True, "tasks": tasks}
+        if cmd == "spawn_agent":
+            args = request["args"]
+            executor = _pool_executor(
+                self.pool, args["jail_root"], args["workdir"], args["allowed_executables"]
+            )
+            task_id = self.agent_tasks.submit(
+                agent_name=args["agent_name"],
+                goal=args["goal"],
+                jail_root=args["jail_root"],
+                workdir=args["workdir"],
+                allowed_executables=args["allowed_executables"],
+                executor=executor,
+            )
+            return {"ok": True, "task_id": task_id}
+        if cmd == "agent_task_status":
+            status = self.agent_tasks.status(request["task_id"])
+            if status is None:
+                return {"ok": True, "status": None}
+            return {
+                "ok": True,
+                "status": {"status": status.status, "result": status.result, "error": status.error},
+            }
         return {"ok": False, "error": f"unknown command: {cmd!r}"}
 
 

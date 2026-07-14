@@ -103,3 +103,39 @@ async def run_command(
         if kind in ("completed", "failed"):
             return status
         await asyncio.sleep(poll_interval)
+
+
+async def spawn_agent(
+    agent_name: str,
+    goal: str,
+    *,
+    jail_root: str,
+    workdir: str,
+    allowed_executables: list[str],
+) -> str:
+    """Spawn a catalog agent on `goal`, running inside swarmkitd. Returns a
+    task_id immediately — the agent's own tool calls run through the same
+    Rust worker pool as submit_task, but the LLM conversation itself runs as
+    an asyncio task in the daemon (see daemon/agent_tasks.py)."""
+    response = await _request(
+        {
+            "cmd": "spawn_agent",
+            "args": {
+                "agent_name": agent_name,
+                "goal": goal,
+                "jail_root": jail_root,
+                "workdir": workdir,
+                "allowed_executables": allowed_executables,
+            },
+        }
+    )
+    if not response.get("ok"):
+        raise RuntimeError(response.get("error", "spawn_agent failed"))
+    return response["task_id"]
+
+
+async def agent_task_status(task_id: str) -> dict[str, Any] | None:
+    response = await _request({"cmd": "agent_task_status", "task_id": task_id})
+    if not response.get("ok"):
+        raise RuntimeError(response.get("error", "agent_task_status failed"))
+    return response["status"]

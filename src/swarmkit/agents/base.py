@@ -87,7 +87,12 @@ class Agent:
         workdir: str,
         allowed_executables: list[str],
         timeout_secs: float = 30.0,
+        extra_tools: list[Any] | None = None,
     ) -> AgentRunResult:
+        """`extra_tools` are additional tool_runner-compatible tools appended
+        alongside run_command — e.g. tools from an external MCP server via
+        mcp_server.client_tools.connect_stdio(), so an agent can use
+        third-party capabilities (search, parsing, ...) in the same loop."""
         sandbox_calls: list[dict[str, Any]] = []
         executor = self._executor or local_executor(
             jail_root=jail_root,
@@ -113,7 +118,7 @@ class Agent:
             system=self.config.system_prompt,
             thinking={"type": "adaptive"},
             output_config={"effort": self.config.effort},
-            tools=[run_command],
+            tools=[run_command, *(extra_tools or [])],
             messages=[{"role": "user", "content": goal}],
         )
 

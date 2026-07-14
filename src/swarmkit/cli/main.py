@@ -12,6 +12,7 @@ from swarmkit.cli import daemon_client
 from swarmkit.cli.daemon_client import DaemonUnavailable
 from swarmkit.daemon import supervisor
 from swarmkit.daemon.server import DEFAULT_CONCURRENCY, pid_path, socket_path
+from swarmkit.mcp_server import client_tools
 from swarmkit.swarm.coordinator import Coordinator
 from swarmkit.swarm.topology import Topology
 
@@ -232,6 +233,35 @@ def swarm_run(
         click.echo(f"overall: {'success' if result.success else 'FAILED'}")
 
     asyncio.run(_run())
+
+
+@cli.group()
+def mcp() -> None:
+    """MCP integration: serve swarmkit's own tools, or inspect an external server."""
+
+
+@mcp.command("serve")
+def mcp_serve() -> None:
+    """Run swarmkit's own MCP server over stdio (spawn_agent, get_task_status,
+    list_agents, query_memory) — point an MCP client (e.g. Claude Code) at
+    this command."""
+    from swarmkit.mcp_server.server import main as serve_main
+
+    serve_main()
+
+
+@mcp.command("list-tools")
+@click.argument("command")
+@click.argument("args", nargs=-1)
+def mcp_list_tools(command: str, args: tuple[str, ...]) -> None:
+    """List the tools an external stdio MCP server exposes, e.g.:
+
+    swarmkit mcp list-tools /path/to/mcp-native-core
+    """
+    tools = asyncio.run(client_tools.list_tools(command, list(args)))
+    for t in tools:
+        click.echo(f"{t['name']}: {t['description']}")
+        click.echo(f"  input_schema: {json.dumps(t['input_schema'])}")
 
 
 if __name__ == "__main__":
