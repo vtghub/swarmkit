@@ -387,5 +387,29 @@ def mcp_list_tools(command: str, args: tuple[str, ...]) -> None:
         click.echo(f"  input_schema: {json.dumps(t['input_schema'])}")
 
 
+@cli.group()
+def docs() -> None:
+    """Generate project documentation."""
+
+
+@docs.command("generate")
+@click.option(
+    "--dir",
+    "target_dir",
+    default=".",
+    show_default=True,
+    help="Directory to write AGENTS.md and CLAUDE.md into.",
+)
+def docs_generate(target_dir: str) -> None:
+    """Emit a lean AGENTS.md/CLAUDE.md reflecting swarmkit's real feature
+    surface — the agent catalog section is rendered from the live catalog,
+    so it can never balloon past what's actually installed."""
+    from swarmkit.docs.generate import write
+
+    agents_path, claude_path = write(target_dir)
+    click.echo(f"wrote {agents_path}")
+    click.echo(f"wrote {claude_path}")
+
+
 if __name__ == "__main__":
     cli()

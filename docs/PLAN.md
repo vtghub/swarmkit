@@ -66,7 +66,7 @@ swarmkit/
     mcp_server/      server.py, client_tools.py                    # no dedicated Rust hot-path module — see MCP integration scope note above
     federation/       identity.py, transport.py                    # ed25519 identity, explicit peer registry, signed HTTP RPC
     security/         secrets.py, audit.py                          # sandbox enforcement lives in Rust; audit log is an append-only SQLite file (engine-enforced)
-    docs/             generate.py                                   # emits a lean AGENTS.md/CLAUDE.md, not 60% boilerplate
+    docs/             generate.py                                   # emits a lean AGENTS.md/CLAUDE.md, not 60% boilerplate (`swarmkit docs generate`)
   tests/{unit,integration,benchmarks}/
   scripts/{demo_single_agent.py, demo_swarm.py}
 ```
